@@ -1,0 +1,81 @@
+FROM nvidia/cuda:9.0-cudnn7-devel-ubuntu16.04
+MAINTAINER MdMahmudul_Hasan@comcast.com
+
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends \
+	    build-essential \
+	    apt-utils \
+	    pkg-config \
+	    curl \
+	    wget \
+	    software-properties-common \
+	    python3-pip \
+	    python3-setuptools \
+	    git \
+	    unzip \
+	&& add-apt-repository -y ppa:deadsnakes/ppa \
+	&& apt-get update \
+	&& apt-get install -y python3.5 python3.5-dev \
+	&& apt-get clean \
+	&& rm -rf /var/lib/apt/lists/*
+
+RUN cd /mnt && mkdir cmake && cd cmake \
+	&& wget -nv https://github.com/Kitware/CMake/releases/download/v3.12.4/cmake-3.12.4-Linux-x86_64.tar.gz \
+	&& tar zxf cmake-3.12.4-Linux-x86_64.tar.gz \
+	&& cd cmake-3.12.4-Linux-x86_64 \
+	&& cp -a bin share doc /usr/local/ \
+  	&& rm -fR /mnt/cmake
+
+RUN ln -s /usr/bin/python3.5 /usr/bin/python
+
+RUN add-apt-repository ppa:mc3man/xerus-media \
+	&& apt-get update \
+	&& apt-get install -y ffmpeg \
+	&& apt-get install -y frei0r-plugins
+
+RUN python -m pip install --upgrade pip && \
+	python -m pip install numpy \
+		imageio \
+		tqdm \
+		pandas \
+		jupyterlab \
+		tensorflow-gpu \
+		dm-sonnet \
+		tensorflow-probability \
+		tensorflow-hub \
+		torch \
+		torchvision
+
+RUN apt-get install -y libjpeg8-dev libtiff5-dev libjasper-dev libpng12-dev \
+	libavcodec-dev libavformat-dev libswscale-dev libv4l-dev \
+	libatlas-base-dev \
+	libhdf5-serial-dev
+
+RUN cd /mnt && mkdir opencv_compile && cd opencv_compile \
+	&& wget -nv -O opencv.zip https://github.com/opencv/opencv/archive/3.4.4.zip \
+	&& wget -nv -O opencv_contrib.zip https://github.com/opencv/opencv_contrib/archive/3.4.4.zip \
+	&& unzip -qq opencv.zip \
+	&& unzip -qq opencv_contrib.zip
+
+RUN cd /mnt/opencv_compile/opencv-3.4.4 && mkdir build && cd build \
+	&& cmake -D CMAKE_BUILD_TYPE=RELEASE \
+	    -D CMAKE_INSTALL_PREFIX=/usr/local \
+	    -D WITH_CUDA=ON \
+	    -D PYTHON_INCLUDE_DIR=/usr/include/python3.5 \
+	    -D PYTHON_LIBRARY=/usr/lib/python3.5/config-3.5m-x86_64-linux-gnu/libpython3.5.so \
+	    -D PYTHON_EXECUTABLE:FILEPATH=`which python` \
+	    -D WITH_FFMPEG=ON \
+	    -D ENABLE_FAST_MATH=1 \
+	    -D CUDA_FAST_MATH=1 \
+	    -D WITH_CUBLAS=1 \
+	    -D INSTALL_PYTHON_EXAMPLES=ON \
+	    -D OPENCV_EXTRA_MODULES_PATH=../../opencv_contrib-3.4.4/modules \
+	    -D BUILD_EXAMPLES=ON .. \
+    && make -j8 \
+    && make install \
+    && ldconfig \
+	&& cp lib/python3/* /usr/local/lib/python3.5/dist-packages/ \
+	&& rm -fR /mnt/opencv_compile
+
+WORKDIR /mnt/research-6f/mhasan/my/optflow-opencv
+ENTRYPOINT /bin/bash
