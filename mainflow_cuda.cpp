@@ -5,7 +5,6 @@
 #include "opencv2/cudaoptflow.hpp"
 #include "opencv2/cudaarithm.hpp"
 
-
 using namespace std;
 using namespace cv;
 using namespace cv::cuda;
@@ -122,6 +121,20 @@ static void drawOpticalFlow(const Mat_<float>& flowx, const Mat_<float>& flowy, 
     }
 }
 
+void convertFlowToImage(const Mat &flow_x, const Mat &flow_y, Mat &img_x, Mat &img_y,
+                               double lowerBound, double higherBound) {
+#define CAST(v, L, H) ((v) > (H) ? 255 : (v) < (L) ? 0 : cvRound(255*((v) - (L))/((H)-(L))))
+    for (int i = 0; i < flow_x.rows; ++i) {
+        for (int j = 0; j < flow_y.cols; ++j) {
+            float x = flow_x.at<float>(i,j);
+            float y = flow_y.at<float>(i,j);
+            img_x.at<uchar>(i,j) = CAST(x, lowerBound, higherBound);
+            img_y.at<uchar>(i,j) = CAST(y, lowerBound, higherBound);
+        }
+    }
+#undef CAST
+}
+
 static cv::Mat showFlow(const GpuMat& d_flow)
 {
     GpuMat planes[2];
@@ -136,6 +149,58 @@ static cv::Mat showFlow(const GpuMat& d_flow)
     return out;
 }
 
+void drawOptFlowMap(const Mat& flow, Mat& cflowmap, int step,double, const Scalar& color){
+    for(int y = 0; y < cflowmap.rows; y += step)
+        for(int x = 0; x < cflowmap.cols; x += step)
+        {
+            const Point2f& fxy = flow.at<Point2f>(y, x);
+            line(cflowmap, Point(x,y), Point(cvRound(x+fxy.x), cvRound(y+fxy.y)),
+                 color);
+            circle(cflowmap, Point(x,y), 2, color, -1);
+        }
+}
+
+void encodeFlowMap(const Mat& flow_map_x, const Mat& flow_map_y,
+                   vector<uchar>& encoded_x, vector<uchar>& encoded_y,
+                   int bound, bool to_jpg){
+    Mat flow_img_x(flow_map_x.size(), CV_8UC1);
+    Mat flow_img_y(flow_map_y.size(), CV_8UC1);
+
+    convertFlowToImage(flow_map_x, flow_map_y, flow_img_x, flow_img_y,
+                       -bound, bound);
+
+    if (to_jpg) {
+        imencode(".jpg", flow_img_x, encoded_x);
+        imencode(".jpg", flow_img_y, encoded_y);
+    }else {
+        encoded_x.resize(flow_img_x.total());
+        encoded_y.resize(flow_img_y.total());
+        memcpy(encoded_x.data(), flow_img_x.data, flow_img_x.total());
+        memcpy(encoded_y.data(), flow_img_y.data, flow_img_y.total());
+    }
+}
+
+Mat createSingleImg(vector<uchar>& encoded_x, vector<uchar>& encoded_y, cv::Size img_size){
+    Mat channelR(img_size, CV_8UC1, cv::Scalar(0));
+    Mat channelG(img_size, CV_8UC1, reinterpret_cast<char*>(encoded_y.data()));
+    Mat channelB(img_size, CV_8UC1, reinterpret_cast<char*>(encoded_x.data()));
+
+    // Invert channels,
+    // don't copy data, just the matrix headers
+    std::vector<Mat> channels;
+    channels.push_back(channelB);
+    channels.push_back(channelG);
+    channels.push_back(channelR);
+
+    // Create the output matrix
+    Mat outputMat;
+    merge(channels, outputMat);
+
+    return outputMat;
+}
+
+
+
 int main(int argc, char** argv)
 {
     // Need at least one argument
@@ -146,20 +211,27 @@ int main(int argc, char** argv)
     }
 	cout << "Processing: " << argv[1] << endl;
 
+    if (argc == 4)
+        setDevice(atoi(argv[3]));
+    else
+        setDevice(0);
+
+	// Parameters
+	int bound = 20;
+
     // Capturing video
     VideoCapture cap(argv[1]);
     if(!cap.isOpened())
         return -1;
 
-    Mat frame0, frame1, out;
+    Mat frame0, frame1;
     cap >> frame0;
     cv::cvtColor(frame0, frame0, CV_BGR2GRAY);
 
-    GpuMat d_flow(frame0.size(), CV_32FC2), d_frame0, d_frame1, d_frame0f, d_frame1f;
+    GpuMat d_flow, d_frame0, d_frame1, d_frame0f, d_frame1f;
     Ptr<cuda::OpticalFlowDual_TVL1> optFlow = cuda::OpticalFlowDual_TVL1::create();
 
-
-    cv::VideoWriter vid(argv[2], CV_FOURCC('M','J','P','G'), 25.0, Size(frame0.cols, frame0.rows));
+    std::vector<Mat> flow_frames;
     while(true)
     {
         cap >> frame1;
@@ -170,19 +242,31 @@ int main(int argc, char** argv)
 
         d_frame0.upload(frame0);
         d_frame1.upload(frame1);
-
         d_frame0.convertTo(d_frame0f, CV_32F, 1.0 / 255.0);
         d_frame1.convertTo(d_frame1f, CV_32F, 1.0 / 255.0);
 
         optFlow->calc(d_frame0f, d_frame1f, d_flow);
-        out = showFlow(d_flow);
-        vid.write(out);
+        GpuMat planes[2];
+        cuda::split(d_flow, planes);
 
-        frame0 = frame1;
+        Mat flow_x(planes[0]);
+        Mat flow_y(planes[1]);
+        std::vector<uchar> str_x, str_y, str_img;
+        encodeFlowMap(flow_x, flow_y, str_x, str_y, bound, false);
+
+        Mat single_img = createSingleImg(str_x, str_y, frame1.size());
+        flow_frames.push_back(single_img);
+
+        std::swap(frame0, frame1);
     }
-
     cap.release();
-    vid.release();
+
+    // Loss less compression. It should work with FFMpeg enabled.
+    cv::VideoWriter video_writer(argv[2], CV_FOURCC('F','F','V','1'), cap.get(CV_CAP_PROP_FPS), frame0.size());
+    for(unsigned int i = 0; i < flow_frames.size(); i++){
+        video_writer.write(flow_frames[i]);
+    }
+    video_writer.release();
 
 	return 0;
 }
