@@ -211,10 +211,14 @@ int main(int argc, char** argv)
     }
 	cout << "Processing: " << argv[1] << endl;
 
-    if (argc == 4)
+    if (argc == 4){
+        cout << "Using GPU #: " << argv[3]<< endl;
         setDevice(atoi(argv[3]));
-    else
+    }
+    else {
+        cout << "Using GPU #: 0" << endl;
         setDevice(0);
+    }
 
 	// Parameters
 	int bound = 20;
@@ -227,11 +231,14 @@ int main(int argc, char** argv)
     Mat frame0, frame1;
     cap >> frame0;
     cv::cvtColor(frame0, frame0, CV_BGR2GRAY);
+    cv::Size video_size = frame0.size();
 
     GpuMat d_flow, d_frame0, d_frame1, d_frame0f, d_frame1f;
     Ptr<cuda::OpticalFlowDual_TVL1> optFlow = cuda::OpticalFlowDual_TVL1::create();
 
-    std::vector<Mat> flow_frames;
+    // Loss less compression. It should work with FFMpeg enabled.
+    // cv::VideoWriter video_writer(argv[2], CV_FOURCC('F','F','V','1'), cap.get(CV_CAP_PROP_FPS), video_size);
+    cv::VideoWriter video_writer(argv[2], CV_FOURCC('M','J','P','G'), cap.get(CV_CAP_PROP_FPS), video_size);
     while(true)
     {
         cap >> frame1;
@@ -255,18 +262,20 @@ int main(int argc, char** argv)
         encodeFlowMap(flow_x, flow_y, str_x, str_y, bound, false);
 
         Mat single_img = createSingleImg(str_x, str_y, frame1.size());
-        flow_frames.push_back(single_img);
+        video_writer.write(single_img);
 
         std::swap(frame0, frame1);
     }
     cap.release();
 
     // Loss less compression. It should work with FFMpeg enabled.
-    cv::VideoWriter video_writer(argv[2], CV_FOURCC('F','F','V','1'), cap.get(CV_CAP_PROP_FPS), frame0.size());
-    for(unsigned int i = 0; i < flow_frames.size(); i++){
-        video_writer.write(flow_frames[i]);
-    }
+    // cv::VideoWriter video_writer("abc.avi", CV_FOURCC('M','J','P','G'), cap.get(CV_CAP_PROP_FPS), video_size);
+    // for(unsigned int i = 0; i < flow_frames.size(); i++){
+    //     cout << flow_frames[i] << endl;
+    //     video_writer.write(flow_frames[i]);
+    // }
     video_writer.release();
+    cout << "Flow saved at " << argv[2] << endl;
 
 	return 0;
 }

@@ -78,4 +78,5 @@ RUN cd /mnt/opencv_compile/opencv-3.4.4 && mkdir build && cd build \
 	&& rm -fR /mnt/opencv_compile
 
 WORKDIR /mnt/research-6f/mhasan/my/optflow-opencv
-ENTRYPOINT /bin/bash
+ADD . /optflow
+# ENTRYPOINT ["/bin/bash", "-c", "/optflow/mainflow.out ${*}", "--"]
